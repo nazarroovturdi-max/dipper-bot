@@ -12,7 +12,7 @@ import http.server
 import threading
 
 # ================================
-# 🔑 ОБНОВЛЕННЫЕ КЛЮЧИ
+# 🔑 KEYS
 # ================================
 TELEGRAM_TOKEN = "8816461258:AAFyybkTSZQzugzQl-QR9jFuq1ukcPN6MEI"
 GROQ_API_KEY = "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"
@@ -26,10 +26,9 @@ SYSTEM_PROMPT = "Ты ИИ-ассистент Диппер. Отвечай ра�
 groq_client = Groq(api_key=GROQ_API_KEY)
 scheduler = BackgroundScheduler(timezone=TIMEZONE)
 
-user_histories = {}
+user_contexts = {}
 telegram_app = None
 
-# Заглушка-сервер, чтобы Render не отключал бесплатного бота
 def run_dummy_server():
     class DummyHandler(http.server.SimpleHTTPRequestHandler):
         def do_GET(self):
@@ -81,12 +80,12 @@ def parse_reminder_text(text):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    user_histories[user_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    user_contexts[user_id] = ""
     await update.message.reply_text("Привет! Я Диппер. Напиши мне время и задачу (например: 18:30 выпить воды), и я напомню!")
 
 async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    user_histories[user_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    user_contexts[user_id] = ""
     await update.message.reply_text("История очищена! 🌿")
 
 async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -105,8 +104,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_text = update.message.text
 
-    if user_id not in user_histories:
-        user_histories[user_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    if user_id not in user_contexts:
+        user_contexts[user_id] = ""
 
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
@@ -131,18 +130,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"⏰ Понял! Создал напоминание: \"{text}\" на {dt.strftime('%H:%M')}.")
             return
 
-    user_histories[user_id].append({"role": "user", "content": user_text})
+    # SAFE CHAT HISTORY SYSTEM
+    current_history = user_contexts[user_id]
+    prompt = f"{SYSTEM_PROMPT}\n\nИстория беседы:\n{current_history}\nПользователь: {user_text}\nДиппер:"
+    
     try:
         response = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=user_histories[user_id],
+            messages=[{"role": "user", "content": prompt}],
             max_tokens=1024,
         )
         reply = response.choices.message.content.strip()
-        user_histories[user_id].append({"role": "assistant", "content": reply})
         
-        if len(user_histories[user_id]) > 11:
-            user_histories[user_id] = [{"role": "system", "content": SYSTEM_PROMPT}] + user_histories[user_id][-10:]
+        # Обновляем историю в виде простого текста
+        user_contexts[user_id] += f"\nПользователь: {user_text}\nДиппер: {reply}"
+        if len(user_contexts[user_id]) > 4000:
+            user_contexts[user_id] = user_contexts[user_id][-2000:]
 
         await update.message.reply_text(reply)
     except Exception as e:
@@ -151,8 +154,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     global telegram_app
     scheduler.start()
-    
-    # Запускаем фоновый мини-сервер для прохождения проверок Render
     threading.Thread(target=run_dummy_server, daemon=True).start()
     
     telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).connect_timeout(30.0).read_timeout(30.0).build()
