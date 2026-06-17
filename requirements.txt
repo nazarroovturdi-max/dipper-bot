@@ -1,0 +1,4 @@
+groq
+apscheduler
+pytz
+python-telegram-bot
