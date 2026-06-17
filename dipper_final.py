@@ -8,6 +8,8 @@ from apscheduler.triggers.date import DateTrigger
 import pytz
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+import http.server
+import threading
 
 # ================================
 # 🔑 ОБНОВЛЕННЫЕ КЛЮЧИ
@@ -26,6 +28,16 @@ scheduler = BackgroundScheduler(timezone=TIMEZONE)
 
 user_histories = {}
 telegram_app = None
+
+# Заглушка-сервер, чтобы Render не отключал бесплатного бота
+def run_dummy_server():
+    class DummyHandler(http.server.SimpleHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"Dipper is alive!")
+    server = http.server.HTTPServer(('0.0.0.0', 10000), DummyHandler)
+    server.serve_forever()
 
 def load_reminders():
     if Path(REMINDERS_FILE).exists():
@@ -59,7 +71,6 @@ def parse_reminder_text(text):
     if target_dt < now:
         target_dt += timedelta(days=1)
         
-    # ИСПРАВЛЕНО: Безопасное удаление только ключевых слов, буквы в тексте больше не срезаются
     clean_text = text
     clean_text = re.sub(r'(напомни мне|напомни|поставь напоминание|напоминание|будильник)', '', clean_text, flags=re.IGNORECASE)
     clean_text = re.sub(r'\b(сегодня|завтра|в|по ташкентскому времени|времени)\b', '', clean_text, flags=re.IGNORECASE)
@@ -140,6 +151,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     global telegram_app
     scheduler.start()
+    
+    # Запускаем фоновый мини-сервер для прохождения проверок Render
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+    
     telegram_app = ApplicationBuilder().token(TELEGRAM_TOKEN).connect_timeout(30.0).read_timeout(30.0).build()
     telegram_app.add_handler(CommandHandler("start", start))
     telegram_app.add_handler(CommandHandler("clear", clear))
